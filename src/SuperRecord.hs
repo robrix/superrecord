@@ -63,6 +63,7 @@ module SuperRecord
 where
 
 import SuperRecord.Field
+import SuperRecord.Internal
 import SuperRecord.Sort
 
 import Control.DeepSeq
@@ -92,19 +93,6 @@ type Sort xs = FieldListSort xs
 -- | The core record type. Prefer this type when manually writing type
 -- signatures
 type Record lts = Rec (Sort lts)
-
--- | Internal record type. When manually writing an explicit type signature for
--- a record, use 'Record' instead. For abstract type signatures 'Rec' will work
--- well.
-data Rec (lts :: [*])
-   = Rec
-   {
-#ifndef JS_RECORD
-       _unRec :: SmallArray# Any -- Note that the values are physically in reverse order
-#else
-       _unRec :: !JS.Object
-#endif
-   }
 
 #ifdef JS_RECORD
 copyObject :: JS.Object -> IO JS.Object

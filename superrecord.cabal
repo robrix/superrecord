@@ -23,6 +23,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     SuperRecord
   other-modules:       SuperRecord.Field
+                     , SuperRecord.Internal
                      , SuperRecord.Sort
   build-depends:       base >= 4.9 && < 5
                      , constraints
