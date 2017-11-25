@@ -22,6 +22,7 @@ flag GhcjsNativeRecord
 library
   hs-source-dirs:      src
   exposed-modules:     SuperRecord
+                     , SuperRecord.Unsorted
   other-modules:       SuperRecord.Field
                      , SuperRecord.Internal
                      , SuperRecord.Sort
