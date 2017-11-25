@@ -28,8 +28,15 @@ type Record = Rec
 
 rcons, (&) ::
     forall l t lts s.
-    (RecSize lts ~ s, KnownNat s, KeyDoesNotExist l lts)
+    ( RecSize lts ~ s, KnownNat s
+    , KeyDoesNotExist l lts
+#ifdef JS_RECORD
+    , ToJSVal t
+#endif
+    )
     => l := t -> Rec lts -> Rec (l := t ': lts)
+
+#ifndef JS_RECORD
 rcons (_ := val) (Rec vec#) =
     unsafePerformIO $! IO $ \s# ->
     case newSmallArray# newSize# (error "No value") s# of
@@ -44,6 +51,14 @@ rcons (_ := val) (Rec vec#) =
         !(I# newSize#) = size + 1
         !(I# size#) = size
         size = fromIntegral $ natVal' (proxy# :: Proxy# s)
+#else
+rcons (lbl := val) (Rec obj) =
+    Rec $! unsafePerformIO $!
+    do obj' <- copyObject obj
+       val' <- toJSVal val
+       JS.unsafeSetProp (JSS.pack $ symbolVal lbl) val' obj'
+       pure obj'
+#endif
 {-# INLINE rcons #-}
 
 (&) = rcons
