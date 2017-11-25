@@ -1,5 +1,7 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -8,10 +10,11 @@
 module SuperRecord.Unsorted
     ( -- * Basics
       Record, rcons, (&)
+    , combine, (++:)
     , module S
     ) where
 
-import SuperRecord as S hiding (Record, rcons, (&))
+import SuperRecord as S hiding (Record, rcons, (&), combine, (++:))
 import SuperRecord.Internal
 
 import GHC.Base (Int(..))
@@ -45,3 +48,35 @@ rcons (_ := val) (Rec vec#) =
 
 (&) = rcons
 {-# INLINE (&) #-}
+
+-- | Combine two records
+combine, (++:) ::
+    forall lhs rhs.
+    (KnownNat (RecSize lhs), KnownNat (RecSize rhs), KnownNat (RecSize lhs + RecSize rhs))
+    => Rec lhs
+    -> Rec rhs
+    -> Rec (RecAppend lhs rhs)
+
+#ifndef JS_RECORD
+combine (Rec l#) (Rec r#) =
+    let !(I# sizeL#) = fromIntegral $ natVal' (proxy# :: Proxy# (RecSize lhs))
+        !(I# sizeR#) = fromIntegral $ natVal' (proxy# :: Proxy# (RecSize rhs))
+        !(I# size#) = fromIntegral $ natVal' (proxy# :: Proxy# (RecSize lhs + RecSize rhs))
+    in unsafePerformIO $! IO $ \s# ->
+            case newSmallArray# size# (error "No value") s# of
+              (# s'#, arr# #) ->
+                  case copySmallArray# r# 0# arr# 0# sizeR# s'# of
+                    s''# ->
+                        case copySmallArray# l# 0# arr# sizeR# sizeL# s''# of
+                          s'''# ->
+                              case unsafeFreezeSmallArray# arr# s'''# of
+                                (# s''''#, a# #) -> (# s''''#, Rec a# #)
+#else
+combine (Rec o1) (Rec o2) =
+    unsafePerformIO $
+    Rec <$> mergeObjs o1 o2
+#endif
+{-# INLINE combine #-}
+
+(++:) = combine
+{-# INLINE (++:) #-}
