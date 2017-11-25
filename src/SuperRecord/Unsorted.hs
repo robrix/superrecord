@@ -14,7 +14,7 @@ module SuperRecord.Unsorted
     , module S
     ) where
 
-import SuperRecord as S hiding (Record, rcons, (&), combine, (++:))
+import SuperRecord as S hiding (Record, rcons, (&), combine, (++:), Sort)
 import SuperRecord.Internal
 
 import GHC.Base (Int(..))
