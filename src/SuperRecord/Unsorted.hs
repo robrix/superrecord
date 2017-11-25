@@ -7,11 +7,11 @@
 {-# LANGUAGE MagicHash #-}
 module SuperRecord.Unsorted
     ( -- * Basics
-      rcons, (&)
+      Record, rcons, (&)
     , module S
     ) where
 
-import SuperRecord as S hiding (rcons, (&))
+import SuperRecord as S hiding (Record, rcons, (&))
 import SuperRecord.Internal
 
 import GHC.Base (Int(..))
@@ -19,6 +19,9 @@ import GHC.IO ( IO(..) )
 import GHC.Prim
 import GHC.TypeLits
 import System.IO.Unsafe (unsafePerformIO)
+
+-- | A synonym for the core record type, exported for consistency.
+type Record = Rec
 
 rcons, (&) ::
     forall l t lts s.
