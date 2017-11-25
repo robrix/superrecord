@@ -64,6 +64,8 @@ rcons (lbl := val) (Rec obj) =
 (&) = rcons
 {-# INLINE (&) #-}
 
+infixr 5 &
+
 -- | Combine two records
 combine, (++:) ::
     forall lhs rhs.
