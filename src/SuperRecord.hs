@@ -66,10 +66,7 @@ import SuperRecord.Field
 import SuperRecord.Internal
 import SuperRecord.Sort
 
-import Control.DeepSeq
 import Control.Monad.Reader
-import Data.Aeson
-import Data.Aeson.Types (Parser)
 import Data.Constraint
 import Data.Proxy
 import GHC.Base (Int(..), Any)
@@ -79,7 +76,6 @@ import GHC.Prim
 import GHC.TypeLits
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Control.Monad.State as S
-import qualified Data.Text as T
 
 #ifdef JS_RECORD
 import GHCJS.Marshal
@@ -105,44 +101,10 @@ copyObject obj =
        pure objNew
 #endif
 
-instance (RecApply lts lts Show) => Show (Rec lts) where
-    show = show . showRec
-
-instance RecEq lts lts => Eq (Rec lts) where
-    (==) (a :: Rec lts) (b :: Rec lts) = recEq a b (Proxy :: Proxy lts)
-    {-# INLINE (==) #-}
-
-instance
-    ( RecApply lts lts ToJSON
-    ) => ToJSON (Rec lts) where
-    toJSON = recToValue
-    toEncoding = recToEncoding
-
-instance (RecSize lts ~ s, KnownNat s, RecJsonParse lts) => FromJSON (Rec lts) where
-    parseJSON = recJsonParser
-
-instance RecNfData lts lts => NFData (Rec lts) where
-    rnf = recNfData (Proxy :: Proxy lts)
-
 -- | An empty record
 rnil :: Rec '[]
 rnil = unsafeRnil 0
 {-# INLINE rnil #-}
-
--- | An empty record with an initial size for the record
-unsafeRnil :: Int -> Rec '[]
-#ifndef JS_RECORD
-unsafeRnil (I# n#) =
-    unsafePerformIO $! IO $ \s# ->
-    case newSmallArray# n# (error "No Value") s# of
-      (# s'#, arr# #) ->
-          case unsafeFreezeSmallArray# arr# s'# of
-            (# s''#, a# #) -> (# s''# , Rec a# #)
-#else
-unsafeRnil _ =
-    unsafePerformIO $! Rec <$> JS.create
-#endif
-{-# INLINE unsafeRnil #-}
 
 -- | Prepend a record entry to a record 'Rec'
 rcons ::
@@ -211,40 +173,6 @@ instance
         in case writeSmallArray# tgt# setAt# (unsafeCoerce# val) s# of
              s'# -> recCopyInto pNext lts prxy tgt# s'#
 
--- | Prepend a record entry to a record 'Rec'. Assumes that the record was created with
--- 'unsafeRnil' and still has enough free slots, mutates the original 'Rec' which should
--- not be reused after
-unsafeRCons ::
-    forall l t lts s.
-    ( RecSize lts ~ s
-    , KnownNat s
-    , KeyDoesNotExist l lts
-#ifdef JS_RECORD
-    , ToJSVal t
-#endif
-    )
-    => l := t -> Rec lts -> Rec (l := t ': lts)
-
-#ifndef JS_RECORD
-unsafeRCons (_ := val) (Rec vec#) =
-    unsafePerformIO $! IO $ \s# ->
-    case unsafeThawSmallArray# vec# s# of
-      (# s'#, arr# #) ->
-          case writeSmallArray# arr# size# (unsafeCoerce# val) s'# of
-            s''# ->
-                case unsafeFreezeSmallArray# arr# s''# of
-                  (# s'''#, a# #) -> (# s'''#, Rec a# #)
-    where
-        !(I# size#) = fromIntegral $ natVal' (proxy# :: Proxy# s)
-#else
-unsafeRCons (lbl := val) (Rec obj) =
-    Rec $! unsafePerformIO $!
-    do val' <- toJSVal val
-       JS.unsafeSetProp (JSS.pack $ symbolVal lbl) val' obj
-       pure obj
-#endif
-{-# INLINE unsafeRCons #-}
-
 -- | Alias for 'rcons'
 (&) ::
     forall l t lts s sortedLts.
@@ -268,14 +196,6 @@ type family RecAll (c :: u -> Constraint) (rs :: [u]) :: Constraint where
   RecAll c '[] = ()
   RecAll c (r ': rs) = (c r, RecAll c rs)
 
-type family KeyDoesNotExist (l :: Symbol) (lts :: [*]) :: Constraint where
-    KeyDoesNotExist l '[] = 'True ~ 'True
-    KeyDoesNotExist l (l := t ': lts) =
-        TypeError
-        ( 'Text "Duplicate key " ':<>: 'Text l
-        )
-    KeyDoesNotExist q (l := t ': lts) = KeyDoesNotExist q lts
-
 type RecAppend lhs rhs = RecAppendH lhs rhs rhs '[]
 
 type family ListConcat (xs :: [*]) (ys :: [*]) :: [*] where
@@ -292,62 +212,10 @@ type family RecAppendH (lhs ::[*]) (rhs :: [*]) (rhsall :: [*]) (accum :: [*]) :
     RecAppendH (l := t ': lhs) '[] rhsall acc = RecAppendH lhs rhsall rhsall (l := t ': acc)
     RecAppendH '[] rhs rhsall acc = ListConcat (ListReverse acc) rhsall
 
-type family RecSize (lts :: [*]) :: Nat where
-    RecSize '[] = 0
-    RecSize (l := t ': lts) = 1 + RecSize lts
-
-type RecVecIdxPos l lts = RecSize lts - RecTyIdxH 0 l lts - 1
-
-type family RecTyIdxH (i :: Nat) (l :: Symbol) (lts :: [*]) :: Nat where
-    RecTyIdxH idx l (l := t ': lts) = idx
-    RecTyIdxH idx m (l := t ': lts) = RecTyIdxH (1 + idx) m lts
-    RecTyIdxH idx m '[] =
-        TypeError
-        ( 'Text "Could not find label "
-          ':<>: 'Text m
-        )
-
-type family RecTy (l :: Symbol) (lts :: [*]) :: k where
-    RecTy l (l := t ': lts) = t
-    RecTy q (l := t ': lts) = RecTy q lts
-
 -- | Require a record to contain at least the listed labels
 type family HasOf (req :: [*]) (lts :: [*]) :: Constraint where
     HasOf (l := t ': req) lts = (Has l lts t, HasOf req lts)
     HasOf '[] lts = 'True ~ 'True
-
--- | Require a record to contain a label
-type Has l lts v =
-   ( RecTy l lts ~ v
-   , KnownNat (RecSize lts)
-   , KnownNat (RecVecIdxPos l lts)
-#ifdef JS_RECORD
-   , KnownSymbol l, FromJSVal v, ToJSVal v
-#endif
-   )
-
--- | Get an existing record field
-get ::
-    forall l v lts.
-    ( Has l lts v
-    )
-    => FldProxy l -> Rec lts -> v
-#ifndef JS_RECORD
-get _ (Rec vec#) =
-    let !(I# readAt#) =
-            fromIntegral (natVal' (proxy# :: Proxy# (RecVecIdxPos l lts)))
-        anyVal :: Any
-        anyVal =
-           case indexSmallArray# vec# readAt# of
-             (# a# #) -> a#
-    in unsafeCoerce# anyVal
-#else
-get lbl (Rec obj) =
-    unsafePerformIO $!
-    do r <- JS.unsafeGetProp (JSS.pack $ symbolVal lbl) obj
-       fromJSValUnchecked r
-#endif
-{-# INLINE get #-}
 
 -- | Alias for 'get'
 (&.) :: forall l v lts. (Has l lts v) => Rec lts -> FldProxy l -> v
@@ -553,18 +421,6 @@ instance (KnownSymbol l, RecKeys lts) => RecKeys (l := t ': lts) where
             more = Proxy
         in (lbl `RFCons` recFields more)
 
--- | Apply a function to each key element pair for a record
-reflectRec ::
-    forall c r lts. (RecApply lts lts c)
-    => Proxy c
-    -> (forall a. c a => String -> a -> r)
-    -> Rec lts
-    -> [r]
-reflectRec _ f r =
-    reverse $
-    recApply (\(Dict :: Dict (c a)) s v xs -> (f s v : xs)) r (Proxy :: Proxy lts) []
-{-# INLINE reflectRec #-}
-
 -- | Fold over all elements of a record
 reflectRecFold ::
     forall c r lts. (RecApply lts lts c)
@@ -576,111 +432,6 @@ reflectRecFold ::
 reflectRecFold _ f r =
     recApply (\(Dict :: Dict (c a)) s v x -> f s v x) r (Proxy :: Proxy lts)
 {-# INLINE reflectRecFold #-}
-
--- | Convert all elements of a record to a 'String'
-showRec :: forall lts. (RecApply lts lts Show) => Rec lts -> [(String, String)]
-showRec = reflectRec @Show Proxy (\k v -> (k, show v))
-
-recToValue :: forall lts. (RecApply lts lts ToJSON) => Rec lts -> Value
-recToValue r = object $ reflectRec @ToJSON Proxy (\k v -> (T.pack k, toJSON v)) r
-
-recToEncoding :: forall lts. (RecApply lts lts ToJSON) => Rec lts -> Encoding
-recToEncoding r = pairs $ mconcat $ reflectRec @ToJSON Proxy (\k v -> (T.pack k .= v)) r
-
-recJsonParser :: forall lts s. (RecSize lts ~ s, KnownNat s, RecJsonParse lts) => Value -> Parser (Rec lts)
-recJsonParser =
-    withObject "Record" $ \o ->
-    recJsonParse initSize o
-    where
-        initSize = fromIntegral $ natVal' (proxy# :: Proxy# s)
-
--- | Machinery needed to implement 'reflectRec'
-class RecApply (rts :: [*]) (lts :: [*]) c where
-    recApply :: (forall a. Dict (c a) -> String -> a -> b -> b) -> Rec rts -> Proxy lts -> b -> b
-
-instance RecApply rts '[] c where
-    recApply _ _ _ b = b
-
-instance
-    ( KnownSymbol l
-    , RecApply rts (RemoveAccessTo l lts) c
-    , Has l rts v
-    , c v
-    ) => RecApply rts (l := t ': lts) c where
-    recApply f r (_ :: Proxy (l := t ': lts)) b =
-        let lbl :: FldProxy l
-            lbl = FldProxy
-            val = get lbl r
-            res = f Dict (symbolVal lbl) val b
-            pNext :: Proxy (RemoveAccessTo l (l := t ': lts))
-            pNext = Proxy
-        in recApply f r pNext res
-
--- | Machinery to implement equality
-class RecEq (rts :: [*]) (lts :: [*]) where
-    recEq :: Rec rts -> Rec rts -> Proxy lts -> Bool
-
-instance RecEq rts '[] where
-    recEq _ _ _ = True
-
-instance
-    ( RecEq rts (RemoveAccessTo l lts)
-    , Has l rts v
-    , Eq v
-    ) => RecEq rts (l := t ': lts) where
-    recEq r1 r2 (_ :: Proxy (l := t ': lts)) =
-       let lbl :: FldProxy l
-           lbl = FldProxy
-           val = get lbl r1
-           val2 = get lbl r2
-           res = val == val2
-           pNext :: Proxy (RemoveAccessTo l (l := t ': lts))
-           pNext = Proxy
-       in res && recEq r1 r2 pNext
-
-type family RemoveAccessTo (l :: Symbol) (lts :: [*]) :: [*] where
-    RemoveAccessTo l (l := t ': lts) = RemoveAccessTo l lts
-    RemoveAccessTo q (l := t ': lts) = (l := t ': RemoveAccessTo l lts)
-    RemoveAccessTo q '[] = '[]
-
--- | Machinery to implement parseJSON
-class RecJsonParse (lts :: [*]) where
-    recJsonParse :: Int -> Object -> Parser (Rec lts)
-
-instance RecJsonParse '[] where
-    recJsonParse initSize _ = pure (unsafeRnil initSize)
-
-instance
-    ( KnownSymbol l, FromJSON t, RecJsonParse lts
-    , RecSize lts ~ s, KnownNat s, KeyDoesNotExist l lts
-#ifdef JS_RECORD
-    , ToJSVal t
-#endif
-    ) => RecJsonParse (l := t ': lts) where
-    recJsonParse initSize obj =
-        do let lbl :: FldProxy l
-               lbl = FldProxy
-           (v :: t) <- obj .: T.pack (symbolVal lbl)
-           rest <- recJsonParse initSize obj
-           pure $ unsafeRCons (lbl := v) rest
-
--- | Machinery for NFData
-class RecNfData (lts :: [*]) (rts :: [*]) where
-    recNfData :: Proxy lts -> Rec rts -> ()
-
-instance RecNfData '[] rts where
-    recNfData _ _ = ()
-
-instance
-    ( Has l rts v
-    , NFData v
-    , RecNfData (RemoveAccessTo l lts) rts
-    ) => RecNfData (l := t ': lts) rts where
-    recNfData (_ :: (Proxy (l := t ': lts))) r =
-        let !v = get (FldProxy :: FldProxy l) r
-            pNext :: Proxy (RemoveAccessTo l (l := t ': lts))
-            pNext = Proxy
-        in deepseq v (recNfData pNext r)
 
 -- | Conversion helper to bring a Haskell type to a record. Note that the
 -- native Haskell type must be an instance of 'Generic'
@@ -750,14 +501,6 @@ instance
     )
     => ToNative (l :*: r) lts where
     toNative' r = toNative' r :*: toNative' r
-
-#ifdef JS_RECORD
-instance ToJSVal (Rec x) where
-    toJSVal (Rec (JS.Object obj)) = pure obj
-
-instance FromJSVal (Rec x) where
-    fromJSVal jv = pure (Just $ Rec $ JS.Object jv) -- TODO: implement checking!!
-#endif
 
 -- | Convert a record to a native Haskell type
 toNative :: (Generic a, ToNative (Rep a) lts) => Rec lts -> a
